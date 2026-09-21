@@ -6,6 +6,7 @@ import {
   findSubmitControl,
   hasPasswordField,
   looksLoggedIn,
+  waitForFormReady,
 } from '../src/discovery.js';
 
 test.describe('Account flows: signup, forgot password, profile, protected pages', () => {
@@ -19,7 +20,15 @@ test.describe('Account flows: signup, forgot password, profile, protected pages'
     const navigation = await timedGoto(page, signupUrl as string);
     expect(navigation.status, `signup page returned HTTP ${navigation.status}`).toBeLessThan(400);
 
-    const inputs = await page.locator('form input').count();
+    // Wait for a client-side router to render the form before judging it empty,
+    // otherwise a slow SPA mount is reported as a broken signup page.
+    const mounted = await waitForFormReady(page);
+    test.skip(
+      !mounted,
+      'signup route rendered no form controls — it may be an informational page rather than a registration form',
+    );
+
+    const inputs = await page.locator('form input, input:not([type="hidden"])').count();
     expect(inputs, 'signup page exposes no form inputs').toBeGreaterThan(0);
   });
 

@@ -32,8 +32,12 @@ tests:
 
 # Optional hints. Leave a path empty and the suite discovers it from the
 # homepage (links/buttons matching the feature) and skips gracefully if absent.
+#
+# Hash routes ("#login") are supported: this site is a single-page app whose
+# login form is rendered client-side by the router, so the fragment is the real
+# address of the form. A hint is exact — it skips discovery guessing entirely.
 paths:
-  login: ""
+  login: "#login"
   signup: ""
   forgotPassword: ""
   profile: ""
