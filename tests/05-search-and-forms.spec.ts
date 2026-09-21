@@ -1,6 +1,13 @@
 import { test, expect } from '../src/fixtures.js';
 import { timedGoto } from '../src/collectors.js';
-import { findFeatureUrl, findSearchInput, findSubmitControl } from '../src/discovery.js';
+import {
+  activateAuthPanel,
+  describeFormState,
+  findEmailInput,
+  findFeatureUrl,
+  findSearchInput,
+  findSubmitControl,
+} from '../src/discovery.js';
 
 test.describe('Search and form validation', () => {
   test('search returns a result page', async ({ page, config }) => {
@@ -43,9 +50,10 @@ test.describe('Search and form validation', () => {
       const loginUrl = await findFeatureUrl(page, config, 'login');
       test.skip(!loginUrl, 'no forms discovered anywhere on this site');
       await timedGoto(page, loginUrl as string);
+      await activateAuthPanel(page);
       formCount = await page.locator('form').count();
     }
-    test.skip(formCount === 0, 'no forms discovered on this site');
+    test.skip(formCount === 0, 'no <form> elements on this site (inputs may be wired via JS)');
 
     const requiredFields = page.locator('form input[required], form select[required], form textarea[required]');
     const requiredCount = await requiredFields.count();
@@ -73,21 +81,29 @@ test.describe('Search and form validation', () => {
     test.skip(!config.tests.forms, 'form validation checks disabled in config.yaml');
 
     await timedGoto(page, config.baseUrl);
-    let emailFields = page.locator('input[type="email"]');
+    // Resolve the first USABLE email input, not the first in DOM order: pages
+    // that mount every panel at once expose collapsed 0x0 email fields from
+    // inactive forms ahead of the live one.
+    let field = await findEmailInput(page);
 
-    if ((await emailFields.count()) === 0) {
+    if (!field) {
       const loginUrl = await findFeatureUrl(page, config, 'login');
       test.skip(!loginUrl, 'no email inputs discovered on this site');
       await timedGoto(page, loginUrl as string);
-      emailFields = page.locator('input[type="email"]');
+      await activateAuthPanel(page);
+      field = await findEmailInput(page);
     }
-    test.skip((await emailFields.count()) === 0, 'no email inputs discovered on this site');
 
-    const field = emailFields.first();
-    test.skip(!(await field.isVisible().catch(() => false)), 'email input is not visible');
+    if (!field) {
+      test.info().annotations.push({
+        type: 'email-validation-diagnostic',
+        description: await describeFormState(page),
+      });
+    }
+    test.skip(!field, 'no usable email input discovered on this site');
 
-    await field.fill('not-a-valid-email');
-    const valid = await field.evaluate((element) => (element as HTMLInputElement).checkValidity());
+    await field!.fill('not-a-valid-email');
+    const valid = await field!.evaluate((element) => (element as HTMLInputElement).checkValidity());
     expect(valid, 'an invalid email address passed native validation').toBe(false);
   });
 });

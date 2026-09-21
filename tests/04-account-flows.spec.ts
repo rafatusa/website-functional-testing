@@ -5,6 +5,7 @@ import {
   describeFormState,
   findFeatureUrl,
   findIdentityInput,
+  findPasswordInput,
   findSubmitControl,
   hasPasswordField,
   looksLoggedIn,
@@ -35,7 +36,7 @@ test.describe('Account flows: signup, forgot password, profile, protected pages'
     }
     test.skip(
       !mounted,
-      'signup route rendered no form controls — see the signup-form-diagnostic annotation',
+      'signup route rendered no usable form controls — see the signup-form-diagnostic annotation',
     );
 
     const inputs = await page.locator('form input, input:not([type="hidden"])').count();
@@ -115,19 +116,19 @@ test.describe('Account flows: signup, forgot password, profile, protected pages'
     await timedGoto(page, loginUrl as string);
     await activateAuthPanel(page);
     const identity = await findIdentityInput(page);
-    const password = page.locator('input[type="password"]').first();
+    const password = await findPasswordInput(page);
     const submit = await findSubmitControl(page);
 
-    if (!identity || !submit) {
+    if (!identity || !password || !submit) {
       test.info().annotations.push({
         type: 'login-form-diagnostic',
         description: await describeFormState(page),
       });
     }
-    test.skip(!identity || !submit, 'login form fields could not be located');
+    test.skip(!identity || !password || !submit, 'login form fields could not be located');
 
     await identity!.fill(config.credentials.username);
-    await password.fill(config.credentials.password);
+    await password!.fill(config.credentials.password);
     await submit!.click();
     await page.waitForTimeout(2500);
     test.skip(!(await looksLoggedIn(page)), 'login did not succeed, so profile cannot be verified');

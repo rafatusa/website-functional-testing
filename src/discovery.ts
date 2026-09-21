@@ -7,11 +7,9 @@ export type Feature = 'login' | 'signup' | 'forgotPassword' | 'profile' | 'searc
 /**
  * How long to wait for a client-side router to mount a form after navigation.
  *
- * Single-page apps (hash routes like `/#login`, or history-API routes) return
- * the same HTML shell for every URL and render the real form only after the
- * router reacts. Counting inputs immediately after `goto` therefore sees zero
- * of them and produces a false "feature absent" verdict. Every form lookup in
- * this module waits for a mount before reporting nothing found.
+ * Single-page apps render the real form only after the router reacts, so
+ * counting inputs immediately after `goto` sees nothing and produces a false
+ * "feature absent" verdict. Form lookups wait for a mount before giving up.
  */
 const FORM_MOUNT_TIMEOUT_MS = 8000;
 const FORM_POLL_INTERVAL_MS = 250;
@@ -23,6 +21,17 @@ const FORM_POLL_INTERVAL_MS = 250;
  * check would add minutes to the suite for no signal.
  */
 const PRESENCE_CHECK_TIMEOUT_MS = 1000;
+
+/**
+ * How many matches of a selector to examine before moving on.
+ *
+ * SPAs frequently ship EVERY panel in one document (login, signup, reset,
+ * dashboards) and collapse the inactive ones to 0x0 instead of unmounting
+ * them. A selector like input[type="email"] can therefore match several
+ * elements where only one is the live field, so we must scan matches rather
+ * than trusting the first.
+ */
+const MAX_MATCHES_PER_SELECTOR = 20;
 
 /**
  * Keyword sets used to recognise a feature from link hrefs and visible text.
@@ -99,8 +108,25 @@ function isHashRoute(url: string): boolean {
 }
 
 /**
- * Returns the first locator in `candidates` that is present AND visible,
+ * True when an element is genuinely interactable: visible AND occupying real
+ * space. `isVisible()` alone is not enough — a collapsed panel's inputs can
+ * report visible while measuring 0x0, and filling one silently does nothing.
+ */
+async function isUsable(locator: Locator): Promise<boolean> {
+  if (!(await locator.isVisible().catch(() => false))) return false;
+  const box = await locator.boundingBox().catch(() => null);
+  return box !== null && box.width > 0 && box.height > 0;
+}
+
+/**
+ * Returns the first USABLE element among all matches of the given selectors,
  * re-checking until something mounts or the timeout expires.
+ *
+ * Scans EVERY match of each selector, not just the first. SPAs that keep all
+ * panels in the DOM routinely make the first match a collapsed 0x0 field from
+ * an inactive panel (e.g. a hidden signup form preceding the live login form),
+ * so testing only `.first()` reports "no field" while the real one sits a few
+ * nodes later.
  */
 async function firstVisible(
   page: Page,
@@ -110,14 +136,23 @@ async function firstVisible(
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     for (const candidate of candidates) {
-      if ((await candidate.count().catch(() => 0)) > 0) {
-        const first = candidate.first();
-        if (await first.isVisible().catch(() => false)) return first;
+      const count = Math.min(
+        await candidate.count().catch(() => 0),
+        MAX_MATCHES_PER_SELECTOR,
+      );
+      for (let index = 0; index < count; index += 1) {
+        const element = candidate.nth(index);
+        if (await isUsable(element)) return element;
       }
     }
     if (Date.now() >= deadline) return null;
     await page.waitForTimeout(FORM_POLL_INTERVAL_MS);
   }
+}
+
+/** Locators for every identity-input selector, in priority order. */
+function identityCandidates(page: Page): Locator[] {
+  return IDENTITY_SELECTORS.map((selector) => page.locator(selector));
 }
 
 /**
@@ -145,25 +180,16 @@ export async function waitForFormReady(
 }
 
 /**
- * Opens a credential panel that exists in the DOM but is not visible.
+ * Opens a credential panel that is present but not yet interactable.
  *
- * Many sites render login/signup as a modal or a hidden tab that coexists with
- * other panels (e.g. `#l-email` alongside a registration panel). Navigating to
- * the route mounts the markup but does not necessarily ACTIVATE it, so the
- * inputs are present and invisible — which is indistinguishable from "no login
- * form" unless we try to open it. Clicking the discoverable trigger is that try.
- *
- * Returns true when a credential field is visible afterwards.
+ * With the all-matches search above, a login form that merely sits behind
+ * collapsed siblings is already found directly. This remains as a fallback for
+ * genuine modals, where NO credential field has a usable box until a trigger
+ * is clicked. Returns true when a credential field is usable afterwards.
  */
 export async function activateAuthPanel(page: Page): Promise<boolean> {
-  const identityNow = await firstVisible(
-    page,
-    IDENTITY_SELECTORS.map((selector) => page.locator(selector)),
-    PRESENCE_CHECK_TIMEOUT_MS,
-  );
-  if (identityNow) return true;
+  if (await firstVisible(page, identityCandidates(page), PRESENCE_CHECK_TIMEOUT_MS)) return true;
 
-  // Nothing visible yet — look for a control that opens the panel.
   const triggers = [
     page.getByRole('button', { name: /log ?in|sign ?in/i }),
     page.getByRole('link', { name: /log ?in|sign ?in/i }),
@@ -175,15 +201,9 @@ export async function activateAuthPanel(page: Page): Promise<boolean> {
     const count = await trigger.count().catch(() => 0);
     for (let index = 0; index < Math.min(count, 3); index += 1) {
       const control = trigger.nth(index);
-      if (!(await control.isVisible().catch(() => false))) continue;
+      if (!(await isUsable(control))) continue;
       await control.click({ timeout: 5000 }).catch(() => undefined);
-
-      const identity = await firstVisible(
-        page,
-        IDENTITY_SELECTORS.map((selector) => page.locator(selector)),
-        2000,
-      );
-      if (identity) return true;
+      if (await firstVisible(page, identityCandidates(page), 2000)) return true;
     }
   }
   return false;
@@ -316,13 +336,32 @@ function conventionalPaths(feature: Feature): string[] {
   }
 }
 
+/** Returns the live (usable) password field, or null. */
+export async function findPasswordInput(page: Page, timeoutMs = FORM_MOUNT_TIMEOUT_MS) {
+  return firstVisible(page, [page.locator('input[type="password"]')], timeoutMs);
+}
+
+/**
+ * Returns the live (usable) email field, or null.
+ *
+ * Deliberately not `input[type=email]`.first(): a page that mounts several
+ * panels exposes collapsed 0x0 email inputs from inactive forms ahead of the
+ * one the user can actually type into.
+ */
+export async function findEmailInput(page: Page, timeoutMs = FORM_MOUNT_TIMEOUT_MS) {
+  return firstVisible(
+    page,
+    [page.locator('input[type="email"]'), page.locator('input[name*="email" i]')],
+    timeoutMs,
+  );
+}
+
 /**
  * True when the page exposes a password field — the strongest login signal.
  * Waits for a client-side mount before concluding there is none.
  */
 export async function hasPasswordField(page: Page, timeoutMs = FORM_MOUNT_TIMEOUT_MS): Promise<boolean> {
-  const visible = await firstVisible(page, [page.locator('input[type="password"]')], timeoutMs);
-  if (visible) return true;
+  if (await findPasswordInput(page, timeoutMs)) return true;
   // Some forms keep the password field hidden until the identifier is entered;
   // presence in the DOM still counts as a credential form.
   return (await page.locator('input[type="password"]').count()) > 0;
@@ -344,22 +383,17 @@ export async function findSearchInput(page: Page) {
  * Finds the username/email field of a credential form. Ordered from most
  * specific to most generic so we never grab a newsletter box by accident.
  *
- * Falls back to searching INSIDE the container that holds the visible password
- * field: that scopes the search to the real credential form, so an input the
- * generic pass missed is still found without matching unrelated page inputs.
+ * Falls back to searching inside the container of the LIVE password field, so
+ * the identity input is taken from the same panel the user would actually type
+ * into rather than from a collapsed sibling form.
  */
 export async function findIdentityInput(page: Page) {
-  const generic = await firstVisible(
-    page,
-    IDENTITY_SELECTORS.map((selector) => page.locator(selector)),
-  );
+  const generic = await firstVisible(page, identityCandidates(page));
   if (generic) return generic;
 
-  const password = page.locator('input[type="password"]').first();
-  if ((await password.count().catch(() => 0)) === 0) return null;
+  const password = await findPasswordInput(page, PRESENCE_CHECK_TIMEOUT_MS);
+  if (!password) return null;
 
-  // Walk up from the password field to a plausible form container and look
-  // for a sibling text-like input within it.
   const scoped = password.locator(
     'xpath=ancestor::*[self::form or self::div or self::section][1]',
   );
