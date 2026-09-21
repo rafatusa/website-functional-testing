@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 interface PlaywrightTestResult {
@@ -45,7 +45,8 @@ function flatten(suite: PlaywrightSuite, trail: string[], rows: Row[]): void {
 
   for (const spec of suite.specs ?? []) {
     for (const test of spec.tests ?? []) {
-      const last = (test.results ?? [])[test.results!.length - 1];
+      const results = test.results ?? [];
+      const last = results[results.length - 1];
       const status = (test.status ?? last?.status ?? 'unknown').toLowerCase();
       const annotation = (test.annotations ?? []).find((entry) => entry.type === 'skip');
       rows.push({
@@ -78,6 +79,13 @@ function bucket(status: string): 'passed' | 'failed' | 'skipped' | 'flaky' {
   return 'failed';
 }
 
+/**
+ * Builds reports/summary.md from the Playwright JSON reporter output.
+ *
+ * This ALWAYS exits 0. It runs in the same job as the tests, purely to produce
+ * artifacts; the pass/fail verdict is asserted later by scripts/assert-verdict.ts
+ * in the verify stage, which reads status.json from the downloaded artifact.
+ */
 function main(): void {
   const reportsDir = resolve('reports');
   mkdirSync(reportsDir, { recursive: true });
@@ -89,7 +97,7 @@ function main(): void {
   const baseUrl = process.env.SITE_BASE_URL ?? readBaseUrlFromConfig();
   lines.push(`**Target:** ${baseUrl}`, '');
 
-  let rows: Row[] = [];
+  const rows: Row[] = [];
   let totalDuration = 0;
 
   if (existsSync(resultsFile)) {
@@ -155,31 +163,29 @@ function main(): void {
   lines.push('## Artifacts', '');
   lines.push('- `playwright-html-report` — full interactive HTML report');
   lines.push('- `junit-xml-report` — JUnit XML for CI dashboards');
-  lines.push('- `execution-summary` — this summary');
+  lines.push('- `execution-summary` — this summary plus the recorded verdict');
   lines.push('- `failure-evidence` — screenshots, videos and Playwright traces for failed tests');
   lines.push('');
 
-  const summaryPath = resolve(reportsDir, 'summary.md');
-  writeFileSync(summaryPath, `${lines.join('\n')}\n`, 'utf8');
+  writeFileSync(resolve(reportsDir, 'summary.md'), `${lines.join('\n')}\n`, 'utf8');
   console.log(lines.join('\n'));
 
-  // Re-assert the verdict recorded by run-tests.ts, now that artifacts exist.
-  let recordedExit = 0;
-  if (existsSync(statusFile)) {
-    const status = JSON.parse(readFileSync(statusFile, 'utf8')) as { exitCode?: number };
-    recordedExit = status.exitCode ?? 0;
-  } else {
-    console.error('\nreports/status.json missing — the test stage did not record a verdict.');
-    recordedExit = 1;
-  }
+  // Ship the verdict alongside the summary so the verify job can read it after
+  // downloading the artifact — job filesystems do not survive job boundaries.
+  const summaryDir = resolve(reportsDir, 'summary');
+  mkdirSync(summaryDir, { recursive: true });
+  copyFileSync(resolve(reportsDir, 'summary.md'), resolve(summaryDir, 'summary.md'));
 
-  if (recordedExit !== 0) {
-    console.error(
-      `\nFunctional tests reported failures (${counts.failed} failed). Marking the workflow as failed.`,
+  if (existsSync(statusFile)) {
+    copyFileSync(statusFile, resolve(summaryDir, 'status.json'));
+  } else {
+    writeFileSync(
+      resolve(summaryDir, 'status.json'),
+      `${JSON.stringify({ exitCode: 1, passed: false, note: 'test stage recorded no verdict' }, null, 2)}\n`,
+      'utf8',
     );
-    process.exit(1);
+    console.error('\nreports/status.json missing — recording a failing verdict for the verify stage.');
   }
-  console.log('\nAll executed functional tests passed.');
 }
 
 function escape(value: string): string {

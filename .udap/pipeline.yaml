@@ -57,20 +57,7 @@ stages:
       - name: Launch browsers and execute functional tests
         id: run_tests
         run: npm run test:functional
-
-  - id: verify
-    kind: verify
-    needs: [provision, configure]
-    timeout_minutes: 15
-    steps:
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - name: Install dependencies
-        run: npm ci
-      - name: Generate execution summary and pass/fail statistics
+      - name: Generate execution summary and pass fail statistics
         run: npm run report:summary
       - name: Publish summary to job summary
         run: cat reports/summary.md >> "$GITHUB_STEP_SUMMARY"
@@ -88,11 +75,11 @@ stages:
           path: reports/junit.xml
           retention-days: 30
           if-no-files-found: warn
-      - name: Upload execution summary and statistics
+      - name: Upload execution summary and verdict
         uses: actions/upload-artifact@v4
         with:
           name: execution-summary
-          path: reports/summary.md
+          path: reports/summary
           retention-days: 30
           if-no-files-found: warn
       - name: Upload failure screenshots videos and traces
@@ -102,6 +89,28 @@ stages:
           path: test-results
           retention-days: 30
           if-no-files-found: ignore
+
+  - id: verify
+    kind: verify
+    needs: [provision, configure]
+    timeout_minutes: 10
+    steps:
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Download execution summary and verdict
+        uses: actions/download-artifact@v4
+        with:
+          name: execution-summary
+          path: verdict
+      - name: Assert functional test verdict
+        env:
+          VERDICT_DIR: verdict
+        run: npx tsx scripts/assert-verdict.ts
 
 rollback:
   strategy: none
