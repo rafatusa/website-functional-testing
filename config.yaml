@@ -3,9 +3,14 @@
 # Point baseUrl at the site you want tested and toggle the checks you care about.
 # Credentials may live here for a throwaway/staging account, but prefer the
 # SITE_USERNAME / SITE_PASSWORD repository secrets, which override these values.
+#
+# The SITE_BASE_URL secret also overrides baseUrl, so you can retarget the suite
+# without a commit — change the secret and re-run the Deploy action.
 
-baseUrl: https://example.com
+baseUrl: https://zavora360.royalbengal.ai/
 
+# Left blank on purpose: credentials for this site are supplied by the
+# SITE_USERNAME / SITE_PASSWORD repository secrets. Never commit a real password.
 credentials:
   username: ""
   password: ""

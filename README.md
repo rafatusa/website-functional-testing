@@ -37,11 +37,12 @@ target website → reports → GitHub artifacts.
 Edit [`config.yaml`](config.yaml) — normally the only file you touch.
 
 ```yaml
-baseUrl: https://example.com
+baseUrl: https://zavora360.royalbengal.ai/
 
+# Prefer the SITE_USERNAME / SITE_PASSWORD secrets over committing these.
 credentials:
-  username: user@example.com
-  password: Password123
+  username: ""
+  password: ""
 
 tests:
   login: true
