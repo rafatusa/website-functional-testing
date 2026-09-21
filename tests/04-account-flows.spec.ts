@@ -1,6 +1,8 @@
 import { test, expect } from '../src/fixtures.js';
 import { timedGoto } from '../src/collectors.js';
 import {
+  activateAuthPanel,
+  describeFormState,
   findFeatureUrl,
   findIdentityInput,
   findSubmitControl,
@@ -20,12 +22,20 @@ test.describe('Account flows: signup, forgot password, profile, protected pages'
     const navigation = await timedGoto(page, signupUrl as string);
     expect(navigation.status, `signup page returned HTTP ${navigation.status}`).toBeLessThan(400);
 
-    // Wait for a client-side router to render the form before judging it empty,
-    // otherwise a slow SPA mount is reported as a broken signup page.
+    // Wait for a client-side router to render the form, and open the panel if
+    // registration is presented as a modal/tab, before judging the page empty.
+    await activateAuthPanel(page);
     const mounted = await waitForFormReady(page);
+
+    if (!mounted) {
+      test.info().annotations.push({
+        type: 'signup-form-diagnostic',
+        description: await describeFormState(page),
+      });
+    }
     test.skip(
       !mounted,
-      'signup route rendered no form controls — it may be an informational page rather than a registration form',
+      'signup route rendered no form controls — see the signup-form-diagnostic annotation',
     );
 
     const inputs = await page.locator('form input, input:not([type="hidden"])').count();
@@ -42,7 +52,14 @@ test.describe('Account flows: signup, forgot password, profile, protected pages'
     const navigation = await timedGoto(page, resetUrl as string);
     expect(navigation.status, `forgot password page returned HTTP ${navigation.status}`).toBeLessThan(400);
 
+    await activateAuthPanel(page);
     const identity = await findIdentityInput(page);
+    if (!identity) {
+      test.info().annotations.push({
+        type: 'forgot-password-diagnostic',
+        description: await describeFormState(page),
+      });
+    }
     test.skip(!identity, 'forgot password page exposes no identifier field');
     expect(await identity!.isEditable(), 'recovery field is not editable').toBe(true);
   });
@@ -96,9 +113,17 @@ test.describe('Account flows: signup, forgot password, profile, protected pages'
     test.skip(!loginUrl, 'no login page discovered on this site');
 
     await timedGoto(page, loginUrl as string);
+    await activateAuthPanel(page);
     const identity = await findIdentityInput(page);
     const password = page.locator('input[type="password"]').first();
     const submit = await findSubmitControl(page);
+
+    if (!identity || !submit) {
+      test.info().annotations.push({
+        type: 'login-form-diagnostic',
+        description: await describeFormState(page),
+      });
+    }
     test.skip(!identity || !submit, 'login form fields could not be located');
 
     await identity!.fill(config.credentials.username);

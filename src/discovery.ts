@@ -47,6 +47,20 @@ const TEXT_KEYWORDS: Record<Feature, string[]> = {
   logout: ['log out', 'logout', 'sign out', 'signout'],
 };
 
+/** Selector list for identity (username/email) inputs, most specific first. */
+const IDENTITY_SELECTORS = [
+  'input[type="email"]',
+  'input[name*="email" i]',
+  'input[name*="user" i]',
+  'input[name*="phone" i]',
+  'input[id*="email" i]',
+  'input[id*="user" i]',
+  'input[placeholder*="email" i]',
+  'input[placeholder*="user" i]',
+  'input[type="tel"]',
+  'input[type="text"]',
+];
+
 export interface DiscoveredLink {
   href: string;
   text: string;
@@ -87,10 +101,6 @@ function isHashRoute(url: string): boolean {
 /**
  * Returns the first locator in `candidates` that is present AND visible,
  * re-checking until something mounts or the timeout expires.
- *
- * This is the single place that tolerates client-side rendering: callers get
- * either a real locator or a definitive null, without each spec re-inventing
- * its own wait.
  */
 async function firstVisible(
   page: Page,
@@ -113,8 +123,8 @@ async function firstVisible(
 /**
  * Waits for any form-like control to mount on the current page.
  *
- * Used to distinguish "this page genuinely has no form" from "the router has
- * not rendered it yet" — the difference between a truthful skip and a false
+ * Distinguishes "this page genuinely has no form" from "the router has not
+ * rendered it yet" — the difference between a truthful skip and a false
  * failure. Returns true when something form-like appeared.
  */
 export async function waitForFormReady(
@@ -132,6 +142,90 @@ export async function waitForFormReady(
     timeoutMs,
   );
   return control !== null;
+}
+
+/**
+ * Opens a credential panel that exists in the DOM but is not visible.
+ *
+ * Many sites render login/signup as a modal or a hidden tab that coexists with
+ * other panels (e.g. `#l-email` alongside a registration panel). Navigating to
+ * the route mounts the markup but does not necessarily ACTIVATE it, so the
+ * inputs are present and invisible — which is indistinguishable from "no login
+ * form" unless we try to open it. Clicking the discoverable trigger is that try.
+ *
+ * Returns true when a credential field is visible afterwards.
+ */
+export async function activateAuthPanel(page: Page): Promise<boolean> {
+  const identityNow = await firstVisible(
+    page,
+    IDENTITY_SELECTORS.map((selector) => page.locator(selector)),
+    PRESENCE_CHECK_TIMEOUT_MS,
+  );
+  if (identityNow) return true;
+
+  // Nothing visible yet — look for a control that opens the panel.
+  const triggers = [
+    page.getByRole('button', { name: /log ?in|sign ?in/i }),
+    page.getByRole('link', { name: /log ?in|sign ?in/i }),
+    page.getByRole('tab', { name: /log ?in|sign ?in/i }),
+    page.locator('[data-target*="login" i], [data-toggle*="login" i], [href="#login"]'),
+  ];
+
+  for (const trigger of triggers) {
+    const count = await trigger.count().catch(() => 0);
+    for (let index = 0; index < Math.min(count, 3); index += 1) {
+      const control = trigger.nth(index);
+      if (!(await control.isVisible().catch(() => false))) continue;
+      await control.click({ timeout: 5000 }).catch(() => undefined);
+
+      const identity = await firstVisible(
+        page,
+        IDENTITY_SELECTORS.map((selector) => page.locator(selector)),
+        2000,
+      );
+      if (identity) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Compact DOM diagnostic for the current page's inputs.
+ *
+ * Attached to test annotations when discovery fails, so a SKIP carries evidence
+ * of WHY. A skip produces no screenshot or trace, which previously made this
+ * class of problem invisible in the report.
+ */
+export async function describeFormState(page: Page): Promise<string> {
+  const details = await page.evaluate(() => {
+    const inputs = Array.from(document.querySelectorAll('input, textarea, select'));
+    const described = inputs.slice(0, 25).map((node) => {
+      const element = node as HTMLInputElement;
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return [
+        element.tagName.toLowerCase(),
+        `type=${element.type ?? '-'}`,
+        `id=${element.id || '-'}`,
+        `name=${element.name || '-'}`,
+        `display=${style.display}`,
+        `visibility=${style.visibility}`,
+        `size=${Math.round(rect.width)}x${Math.round(rect.height)}`,
+      ].join(' ');
+    });
+    return {
+      total: inputs.length,
+      forms: document.querySelectorAll('form').length,
+      url: window.location.href,
+      described,
+    };
+  });
+
+  return [
+    `url=${details.url}`,
+    `inputs=${details.total} forms=${details.forms}`,
+    ...details.described.map((line) => `  - ${line}`),
+  ].join('\n');
 }
 
 /**
@@ -249,20 +343,36 @@ export async function findSearchInput(page: Page) {
 /**
  * Finds the username/email field of a credential form. Ordered from most
  * specific to most generic so we never grab a newsletter box by accident.
+ *
+ * Falls back to searching INSIDE the container that holds the visible password
+ * field: that scopes the search to the real credential form, so an input the
+ * generic pass missed is still found without matching unrelated page inputs.
  */
 export async function findIdentityInput(page: Page) {
-  return firstVisible(page, [
-    page.locator('input[type="email"]'),
-    page.locator('input[name*="email" i]'),
-    page.locator('input[name*="user" i]'),
-    page.locator('input[name*="phone" i]'),
-    page.locator('input[id*="email" i]'),
-    page.locator('input[id*="user" i]'),
-    page.locator('input[placeholder*="email" i]'),
-    page.locator('input[placeholder*="user" i]'),
-    page.locator('input[type="tel"]'),
-    page.locator('input[type="text"]'),
-  ]);
+  const generic = await firstVisible(
+    page,
+    IDENTITY_SELECTORS.map((selector) => page.locator(selector)),
+  );
+  if (generic) return generic;
+
+  const password = page.locator('input[type="password"]').first();
+  if ((await password.count().catch(() => 0)) === 0) return null;
+
+  // Walk up from the password field to a plausible form container and look
+  // for a sibling text-like input within it.
+  const scoped = password.locator(
+    'xpath=ancestor::*[self::form or self::div or self::section][1]',
+  );
+  return firstVisible(
+    page,
+    [
+      scoped.locator('input[type="email"]'),
+      scoped.locator('input[type="text"]'),
+      scoped.locator('input[type="tel"]'),
+      scoped.locator('input:not([type="password"]):not([type="hidden"])'),
+    ],
+    PRESENCE_CHECK_TIMEOUT_MS,
+  );
 }
 
 /** Finds the submit control inside or near a form. */

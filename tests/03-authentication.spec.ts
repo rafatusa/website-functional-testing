@@ -1,12 +1,39 @@
 import { test, expect } from '../src/fixtures.js';
+import type { Page } from '@playwright/test';
 import { timedGoto } from '../src/collectors.js';
 import {
+  activateAuthPanel,
+  describeFormState,
   findFeatureUrl,
   findIdentityInput,
   findSubmitControl,
   hasPasswordField,
   looksLoggedIn,
 } from '../src/discovery.js';
+
+/**
+ * Opens the login route, activates the credential panel if it is a modal/tab,
+ * and returns the located controls. On failure it attaches a DOM diagnostic to
+ * the test so a SKIP explains itself — skips produce no screenshot or trace, so
+ * without this the reason for an undiscoverable form is invisible in the report.
+ */
+async function openLoginForm(page: Page, loginUrl: string) {
+  await timedGoto(page, loginUrl);
+  await activateAuthPanel(page);
+
+  const identity = await findIdentityInput(page);
+  const submit = await findSubmitControl(page);
+  const password = page.locator('input[type="password"]').first();
+
+  if (!identity || !submit) {
+    test.info().annotations.push({
+      type: 'login-form-diagnostic',
+      description: await describeFormState(page),
+    });
+  }
+
+  return { identity, submit, password };
+}
 
 test.describe('Authentication: login, logout and session', () => {
   test('login page is reachable and exposes a credential form', async ({ page, config }) => {
@@ -18,6 +45,7 @@ test.describe('Authentication: login, logout and session', () => {
 
     const navigation = await timedGoto(page, loginUrl as string);
     expect(navigation.status, `login page returned HTTP ${navigation.status}`).toBeLessThan(400);
+    await activateAuthPanel(page);
     expect(await hasPasswordField(page), 'login page exposes no password field').toBe(true);
   });
 
@@ -29,11 +57,7 @@ test.describe('Authentication: login, logout and session', () => {
     const loginUrl = await findFeatureUrl(page, config, 'login');
     test.skip(!loginUrl, 'no login page discovered on this site');
 
-    await timedGoto(page, loginUrl as string);
-    const identity = await findIdentityInput(page);
-    const password = page.locator('input[type="password"]').first();
-    const submit = await findSubmitControl(page);
-
+    const { identity, submit, password } = await openLoginForm(page, loginUrl as string);
     test.skip(!identity || !submit, 'login form fields could not be located');
 
     await identity!.fill(config.credentials.username);
@@ -54,10 +78,7 @@ test.describe('Authentication: login, logout and session', () => {
     const loginUrl = await findFeatureUrl(page, config, 'login');
     test.skip(!loginUrl, 'no login page discovered on this site');
 
-    await timedGoto(page, loginUrl as string);
-    const identity = await findIdentityInput(page);
-    const password = page.locator('input[type="password"]').first();
-    const submit = await findSubmitControl(page);
+    const { identity, submit, password } = await openLoginForm(page, loginUrl as string);
     test.skip(!identity || !submit, 'login form fields could not be located');
 
     await identity!.fill('udap-invalid-user@example.invalid');
@@ -76,10 +97,7 @@ test.describe('Authentication: login, logout and session', () => {
     const loginUrl = await findFeatureUrl(page, config, 'login');
     test.skip(!loginUrl, 'no login page discovered on this site');
 
-    await timedGoto(page, loginUrl as string);
-    const identity = await findIdentityInput(page);
-    const password = page.locator('input[type="password"]').first();
-    const submit = await findSubmitControl(page);
+    const { identity, submit, password } = await openLoginForm(page, loginUrl as string);
     test.skip(!identity || !submit, 'login form fields could not be located');
 
     await identity!.fill(config.credentials.username);
@@ -113,10 +131,7 @@ test.describe('Authentication: login, logout and session', () => {
     const loginUrl = await findFeatureUrl(page, config, 'login');
     test.skip(!loginUrl, 'no login page discovered on this site');
 
-    await timedGoto(page, loginUrl as string);
-    const identity = await findIdentityInput(page);
-    const password = page.locator('input[type="password"]').first();
-    const submit = await findSubmitControl(page);
+    const { identity, submit, password } = await openLoginForm(page, loginUrl as string);
     test.skip(!identity || !submit, 'login form fields could not be located');
 
     await identity!.fill(config.credentials.username);
