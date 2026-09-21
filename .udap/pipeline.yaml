@@ -1,0 +1,112 @@
+version: 1
+name: website-functional-testing
+vcs: github
+
+stages:
+  - id: lint
+    kind: lint
+    timeout_minutes: 10
+    steps:
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Validate config.yaml
+        run: npm run validate:config
+      - name: TypeScript type check
+        run: npm run typecheck
+
+  - id: provision
+    kind: provision
+    needs: [lint]
+    timeout_minutes: 20
+    steps:
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright browsers with OS dependencies
+        run: npx playwright install --with-deps chromium webkit
+      - name: Report prepared environment
+        run: npm run report:env
+
+  - id: configure
+    kind: configure
+    needs: [provision]
+    timeout_minutes: 45
+    env:
+      SITE_USERNAME: ${{ secrets.SITE_USERNAME }}
+      SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
+      SITE_BASE_URL: ${{ secrets.SITE_BASE_URL }}
+    steps:
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright browsers with OS dependencies
+        run: npx playwright install --with-deps chromium webkit
+      - name: Launch browsers and execute functional tests
+        id: run_tests
+        run: npm run test:functional
+
+  - id: verify
+    kind: verify
+    needs: [provision, configure]
+    timeout_minutes: 15
+    steps:
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Generate execution summary and pass/fail statistics
+        run: npm run report:summary
+      - name: Publish summary to job summary
+        run: cat reports/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload Playwright HTML report
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-html-report
+          path: reports/html
+          retention-days: 30
+          if-no-files-found: warn
+      - name: Upload JUnit XML report
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-xml-report
+          path: reports/junit.xml
+          retention-days: 30
+          if-no-files-found: warn
+      - name: Upload execution summary and statistics
+        uses: actions/upload-artifact@v4
+        with:
+          name: execution-summary
+          path: reports/summary.md
+          retention-days: 30
+          if-no-files-found: warn
+      - name: Upload failure screenshots videos and traces
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-evidence
+          path: test-results
+          retention-days: 30
+          if-no-files-found: ignore
+
+rollback:
+  strategy: none
+
+destroy:
+  steps:
+    - name: No infrastructure to destroy
+      run: echo "website-functional-testing provisions no cloud resources; nothing to tear down."

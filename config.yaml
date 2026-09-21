@@ -1,0 +1,52 @@
+# Website Functional Testing — the only file you normally need to edit.
+#
+# Point baseUrl at the site you want tested and toggle the checks you care about.
+# Credentials may live here for a throwaway/staging account, but prefer the
+# SITE_USERNAME / SITE_PASSWORD repository secrets, which override these values.
+
+baseUrl: https://example.com
+
+credentials:
+  username: ""
+  password: ""
+
+tests:
+  homepage: true
+  navigation: true
+  login: true
+  logout: true
+  signup: true
+  forgotPassword: true
+  profile: true
+  search: true
+  forms: true
+  links: true
+  protectedPages: true
+  sessionTimeout: true
+  responsive: true
+
+# Optional hints. Leave a path empty and the suite discovers it from the
+# homepage (links/buttons matching the feature) and skips gracefully if absent.
+paths:
+  login: ""
+  signup: ""
+  forgotPassword: ""
+  profile: ""
+  search: ""
+  logout: ""
+  protected: ""
+
+options:
+  # Milliseconds allowed for a page to reach 'domcontentloaded'.
+  pageLoadBudgetMs: 10000
+  # Maximum number of links sampled per page for the broken-link sweep.
+  maxLinksToCheck: 25
+  # Treat console errors as failures rather than warnings.
+  failOnConsoleErrors: false
+  # Seconds of idleness simulated for the session-timeout check.
+  sessionIdleSeconds: 5
+  # Ignore hosts (analytics, chat widgets) when sweeping links and images.
+  ignoreHosts:
+    - google-analytics.com
+    - googletagmanager.com
+    - doubleclick.net

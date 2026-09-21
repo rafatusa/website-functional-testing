@@ -1,0 +1,25 @@
+{
+  "name": "website-functional-testing",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Reusable Playwright functional testing workflow for any website, driven by a single config.yaml.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "validate:config": "tsx scripts/validate-config.ts",
+    "typecheck": "tsc --noEmit",
+    "report:env": "tsx scripts/report-env.ts",
+    "test:functional": "tsx scripts/run-tests.ts",
+    "test:local": "playwright test",
+    "report:summary": "tsx scripts/summary.ts",
+    "report:open": "playwright show-report reports/html"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.47.2",
+    "@types/node": "22.7.5",
+    "tsx": "4.19.1",
+    "typescript": "5.6.3",
+    "yaml": "2.5.1"
+  }
+}

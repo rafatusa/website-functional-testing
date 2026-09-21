@@ -1,0 +1,24 @@
+# udap:meta cloud=aws region=us-east-1 target=ec2
+
+user: Engineer { shape: person; udap-type: generic.user }
+config: config.yaml (baseUrl, credentials, toggles) { shape: document; udap-type: generic.app }
+secrets: GitHub Secrets (SITE_PASSWORD) { icon: simple:githubactions; udap-type: generic.app }
+runner: GitHub Actions Runner (ubuntu-latest) {
+  node: Node.js 22 + npm ci { icon: simple:nodedotjs; udap-type: generic.app }
+  browsers: Playwright Browsers (chromium, webkit) { icon: simple:playwright; udap-type: generic.app }
+  suite: Functional Test Suite (TypeScript) { icon: simple:typescript; udap-type: generic.app }
+  reporter: HTML + JUnit + Summary Reporters { shape: document; udap-type: generic.app }
+}
+website: Target Website (baseUrl) { shape: cloud; udap-type: generic.cdn }
+artifacts: GitHub Artifacts (report, screenshots, video, trace) { icon: simple:github; udap-type: generic.app }
+
+user -> config: edits baseUrl and test toggles
+user -> runner.node: runs deploy workflow
+secrets -> runner.suite: injects credentials at runtime
+config -> runner.suite: drives capability discovery
+runner.node -> runner.browsers: installs with deps
+runner.browsers -> runner.suite: launches desktop and mobile contexts
+runner.suite -> website: HTTP, navigation, login, forms, links
+website -> runner.suite: responses, console errors, timings
+runner.suite -> runner.reporter: results, screenshots, videos, traces
+runner.reporter -> artifacts: uploads on success and failure
