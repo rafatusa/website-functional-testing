@@ -34,6 +34,24 @@ const PRESENCE_CHECK_TIMEOUT_MS = 1000;
 const MAX_MATCHES_PER_SELECTOR = 20;
 
 /**
+ * Ancestor chain searched when scoping an action to the panel that owns a
+ * field. Ordered outward: the tightest container that holds a submit control
+ * wins, so we never climb far enough to swallow a sibling panel's button.
+ */
+const PANEL_ANCESTOR_XPATHS = [
+  'xpath=ancestor::form[1]',
+  'xpath=ancestor::*[self::div or self::section or self::fieldset][1]',
+  'xpath=ancestor::*[self::div or self::section or self::fieldset][2]',
+  'xpath=ancestor::*[self::div or self::section or self::fieldset][3]',
+];
+
+/** Accessible-name pattern for controls that submit a credential form. */
+const SUBMIT_NAME_PATTERN = /log ?in|sign ?in|submit|continue|register|sign ?up|send|reset/i;
+
+/** Narrower pattern used to prefer the login action over a generic button. */
+const LOGIN_NAME_PATTERN = /log ?in|sign ?in|continue|submit/i;
+
+/**
  * Keyword sets used to recognise a feature from link hrefs and visible text.
  * Deliberately broad: the goal is "does this site appear to have X?", and a
  * false negative only causes a graceful skip.
@@ -249,6 +267,27 @@ export async function describeFormState(page: Page): Promise<string> {
 }
 
 /**
+ * One-line identification of a control, for annotations.
+ *
+ * A failed submit is otherwise indistinguishable from a rejected credential:
+ * recording WHICH button was clicked turns "login did not work" into evidence
+ * without needing to open a trace.
+ */
+export async function describeControl(locator: Locator | null): Promise<string> {
+  if (!locator) return 'none';
+  return locator
+    .evaluate((node) => {
+      const element = node as HTMLElement;
+      const text = (element.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
+      const id = element.id || '-';
+      const name = (element as HTMLInputElement).name || '-';
+      const type = (element as HTMLInputElement).type || '-';
+      return `${element.tagName.toLowerCase()} id=${id} name=${name} type=${type} text="${text}"`;
+    })
+    .catch(() => 'unreadable');
+}
+
+/**
  * Finds the URL for a feature: explicit config hint first, then homepage links,
  * then conventional paths (including SPA hash routes) confirmed by a real visit.
  */
@@ -409,14 +448,83 @@ export async function findIdentityInput(page: Page) {
   );
 }
 
-/** Finds the submit control inside or near a form. */
+/**
+ * Finds the submit control of the panel that OWNS the given field.
+ *
+ * Visibility alone cannot pick the right button on a multi-panel SPA: a header
+ * "Login" trigger or a sibling panel's "Sign Up" button is perfectly visible
+ * and will be found first by a page-wide scan, so the credentials get typed
+ * into one form while a different form's button is clicked — the submit
+ * silently does nothing and the login appears to fail.
+ *
+ * Containment is the only reliable discriminator, so we climb from the field
+ * outward and take the button from the TIGHTEST ancestor that has one,
+ * preferring a login-worded control over a generic button.
+ */
+export async function findSubmitControlNear(page: Page, anchor: Locator | null) {
+  if (!anchor) return findSubmitControl(page);
+
+  for (const ancestor of PANEL_ANCESTOR_XPATHS) {
+    const container = anchor.locator(ancestor);
+    if ((await container.count().catch(() => 0)) === 0) continue;
+
+    const preferred = await firstVisible(
+      page,
+      [
+        container.getByRole('button', { name: LOGIN_NAME_PATTERN }),
+        container.locator('button[type="submit"]'),
+        container.locator('input[type="submit"]'),
+      ],
+      PRESENCE_CHECK_TIMEOUT_MS,
+    );
+    if (preferred) return preferred;
+
+    const anyControl = await firstVisible(
+      page,
+      [
+        container.getByRole('button', { name: SUBMIT_NAME_PATTERN }),
+        container.locator('button'),
+      ],
+      PRESENCE_CHECK_TIMEOUT_MS,
+    );
+    if (anyControl) return anyControl;
+  }
+
+  return null;
+}
+
+/**
+ * Page-wide submit lookup. Correct for single-form pages; on multi-panel sites
+ * prefer findSubmitControlNear, which cannot cross a panel boundary.
+ */
 export async function findSubmitControl(page: Page) {
   return firstVisible(page, [
     page.locator('button[type="submit"]'),
     page.locator('input[type="submit"]'),
-    page.getByRole('button', { name: /log ?in|sign ?in|submit|continue|register|sign ?up|send|reset/i }),
+    page.getByRole('button', { name: SUBMIT_NAME_PATTERN }),
     page.locator('form button'),
   ]);
+}
+
+/**
+ * Submits a credential form.
+ *
+ * Clicks the panel-scoped control when one exists; otherwise presses Enter in
+ * the password field. The keyboard path is always panel-correct — the browser
+ * routes it to the form owning the focused field — so a panel with no
+ * recognisable button still submits instead of skipping.
+ */
+export async function submitCredentialForm(
+  page: Page,
+  password: Locator,
+  submit: Locator | null,
+): Promise<void> {
+  if (submit) {
+    await submit.click({ timeout: 10000 });
+    return;
+  }
+  await password.press('Enter');
+  await page.waitForLoadState('domcontentloaded').catch(() => undefined);
 }
 
 /** Heuristic: does the page look like an authenticated session? */

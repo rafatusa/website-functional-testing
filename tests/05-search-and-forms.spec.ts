@@ -1,4 +1,5 @@
 import { test, expect } from '../src/fixtures.js';
+import type { Locator } from '@playwright/test';
 import { timedGoto } from '../src/collectors.js';
 import {
   activateAuthPanel,
@@ -6,7 +7,7 @@ import {
   findEmailInput,
   findFeatureUrl,
   findSearchInput,
-  findSubmitControl,
+  findSubmitControlNear,
 } from '../src/discovery.js';
 
 test.describe('Search and form validation', () => {
@@ -55,11 +56,28 @@ test.describe('Search and form validation', () => {
     }
     test.skip(formCount === 0, 'no <form> elements on this site (inputs may be wired via JS)');
 
-    const requiredFields = page.locator('form input[required], form select[required], form textarea[required]');
+    // Anchor on a required field that is genuinely interactable, then take the
+    // submit control from ITS form. Clicking a page-wide submit would exercise
+    // a different form than the one whose validation is under test.
+    const requiredFields = page.locator(
+      'form input[required], form select[required], form textarea[required]',
+    );
     const requiredCount = await requiredFields.count();
     test.skip(requiredCount === 0, 'no client-side required fields to validate');
 
-    const submit = await findSubmitControl(page);
+    let anchor: Locator | null = null;
+    for (let index = 0; index < Math.min(requiredCount, 20); index += 1) {
+      const candidate = requiredFields.nth(index);
+      if (!(await candidate.isVisible().catch(() => false))) continue;
+      const box = await candidate.boundingBox().catch(() => null);
+      if (box && box.width > 0 && box.height > 0) {
+        anchor = candidate;
+        break;
+      }
+    }
+    test.skip(!anchor, 'required fields exist but none are interactable on this page');
+
+    const submit = await findSubmitControlNear(page, anchor);
     test.skip(!submit, 'form exposes no submit control');
 
     const urlBefore = page.url();

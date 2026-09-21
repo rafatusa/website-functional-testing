@@ -2,13 +2,15 @@ import { test, expect } from '../src/fixtures.js';
 import { timedGoto } from '../src/collectors.js';
 import {
   activateAuthPanel,
+  describeControl,
   describeFormState,
   findFeatureUrl,
   findIdentityInput,
   findPasswordInput,
-  findSubmitControl,
+  findSubmitControlNear,
   hasPasswordField,
   looksLoggedIn,
+  submitCredentialForm,
   waitForFormReady,
 } from '../src/discovery.js';
 
@@ -117,19 +119,27 @@ test.describe('Account flows: signup, forgot password, profile, protected pages'
     await activateAuthPanel(page);
     const identity = await findIdentityInput(page);
     const password = await findPasswordInput(page);
-    const submit = await findSubmitControl(page);
+    // Scoped to the password field's own panel: a page-wide lookup finds the
+    // first login-worded button in the document, which on a multi-panel site
+    // belongs to another form and submits nothing.
+    const submit = await findSubmitControlNear(page, password);
 
-    if (!identity || !password || !submit) {
+    if (!identity || !password) {
       test.info().annotations.push({
         type: 'login-form-diagnostic',
         description: await describeFormState(page),
       });
+    } else {
+      test.info().annotations.push({
+        type: 'login-submit-control',
+        description: await describeControl(submit),
+      });
     }
-    test.skip(!identity || !password || !submit, 'login form fields could not be located');
+    test.skip(!identity || !password, 'login form fields could not be located');
 
     await identity!.fill(config.credentials.username);
     await password!.fill(config.credentials.password);
-    await submit!.click();
+    await submitCredentialForm(page, password!, submit);
     await page.waitForTimeout(2500);
     test.skip(!(await looksLoggedIn(page)), 'login did not succeed, so profile cannot be verified');
 

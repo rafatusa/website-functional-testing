@@ -3,13 +3,15 @@ import type { Page } from '@playwright/test';
 import { timedGoto } from '../src/collectors.js';
 import {
   activateAuthPanel,
+  describeControl,
   describeFormState,
   findFeatureUrl,
   findIdentityInput,
   findPasswordInput,
-  findSubmitControl,
+  findSubmitControlNear,
   hasPasswordField,
   looksLoggedIn,
+  submitCredentialForm,
 } from '../src/discovery.js';
 
 /**
@@ -18,6 +20,12 @@ import {
  * Every control is resolved by usability, never by DOM order: sites that keep
  * all panels mounted expose several password/email inputs where only one pair
  * is interactable, so `.first()` would target a collapsed signup field.
+ *
+ * The submit control is resolved from the password field's own container —
+ * a page-wide search finds whichever login-worded button appears first in the
+ * DOM, which on a multi-panel site belongs to a different form and submits
+ * nothing. A missing button is not fatal: Enter in the password field submits
+ * the owning form.
  *
  * On failure it attaches a DOM diagnostic — skips produce no screenshot or
  * trace, so without this the reason for an undiscoverable form is invisible.
@@ -28,12 +36,19 @@ async function openLoginForm(page: Page, loginUrl: string) {
 
   const identity = await findIdentityInput(page);
   const password = await findPasswordInput(page);
-  const submit = await findSubmitControl(page);
+  const submit = await findSubmitControlNear(page, password);
 
-  if (!identity || !password || !submit) {
+  if (!identity || !password) {
     test.info().annotations.push({
       type: 'login-form-diagnostic',
       description: await describeFormState(page),
+    });
+  } else {
+    // Records WHICH control will be clicked, so a failed sign-in is
+    // distinguishable from a mis-targeted submit without opening a trace.
+    test.info().annotations.push({
+      type: 'login-submit-control',
+      description: await describeControl(submit),
     });
   }
 
@@ -63,13 +78,13 @@ test.describe('Authentication: login, logout and session', () => {
     test.skip(!loginUrl, 'no login page discovered on this site');
 
     const { identity, password, submit } = await openLoginForm(page, loginUrl as string);
-    test.skip(!identity || !password || !submit, 'login form fields could not be located');
+    test.skip(!identity || !password, 'login form fields could not be located');
 
     await identity!.fill(config.credentials.username);
     await password!.fill(config.credentials.password);
     await Promise.all([
       page.waitForLoadState('networkidle').catch(() => undefined),
-      submit!.click(),
+      submitCredentialForm(page, password!, submit),
     ]);
     await page.waitForTimeout(2000);
 
@@ -84,11 +99,11 @@ test.describe('Authentication: login, logout and session', () => {
     test.skip(!loginUrl, 'no login page discovered on this site');
 
     const { identity, password, submit } = await openLoginForm(page, loginUrl as string);
-    test.skip(!identity || !password || !submit, 'login form fields could not be located');
+    test.skip(!identity || !password, 'login form fields could not be located');
 
     await identity!.fill('udap-invalid-user@example.invalid');
     await password!.fill('ThisPasswordIsIntentionallyWrong1234');
-    await submit!.click();
+    await submitCredentialForm(page, password!, submit);
     await page.waitForTimeout(2500);
 
     expect(await looksLoggedIn(page), 'invalid credentials were accepted').toBe(false);
@@ -103,11 +118,11 @@ test.describe('Authentication: login, logout and session', () => {
     test.skip(!loginUrl, 'no login page discovered on this site');
 
     const { identity, password, submit } = await openLoginForm(page, loginUrl as string);
-    test.skip(!identity || !password || !submit, 'login form fields could not be located');
+    test.skip(!identity || !password, 'login form fields could not be located');
 
     await identity!.fill(config.credentials.username);
     await password!.fill(config.credentials.password);
-    await submit!.click();
+    await submitCredentialForm(page, password!, submit);
     await page.waitForTimeout(2500);
     test.skip(!(await looksLoggedIn(page)), 'login did not succeed, so logout cannot be tested');
 
@@ -137,11 +152,11 @@ test.describe('Authentication: login, logout and session', () => {
     test.skip(!loginUrl, 'no login page discovered on this site');
 
     const { identity, password, submit } = await openLoginForm(page, loginUrl as string);
-    test.skip(!identity || !password || !submit, 'login form fields could not be located');
+    test.skip(!identity || !password, 'login form fields could not be located');
 
     await identity!.fill(config.credentials.username);
     await password!.fill(config.credentials.password);
-    await submit!.click();
+    await submitCredentialForm(page, password!, submit);
     await page.waitForTimeout(2500);
     test.skip(!(await looksLoggedIn(page)), 'login did not succeed, so session cannot be tested');
 
